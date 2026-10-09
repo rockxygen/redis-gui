@@ -281,3 +281,79 @@ export async function executeRedisCommand(rawCommand: string) {
     return { success: false, error: error.message };
   }
 }
+
+// app/actions/redis.ts içerisine eklenecek Stream fonksiyonları:
+
+export interface StreamEntry {
+  id: string; // Örn: "1718000000000-0"
+  fields: Record<string, string>;
+}
+
+/**
+ * GÜVENLİ STREAM OKUMA (XREVRANGE - Son eklenenlerden geriye doğru)
+ */
+export async function getStreamEntries(
+  key: string,
+  count = 50,
+  endId = '+',
+  startId = '-'
+): Promise<{ entries: StreamEntry[]; totalLength: number; ttl: number }> {
+  try {
+    const pipeline = redis.pipeline();
+    pipeline.xrevrange(key, endId, startId, 'COUNT', count); // En son eklenen mesajları getirir
+    pipeline.xlen(key); // Stream'deki toplam mesaj sayısı (O(1))
+    pipeline.ttl(key);
+
+    const results = await pipeline.exec();
+
+    const rawEntries = (results?.[0]?.[1] as any[]) || [];
+    const totalLength = (results?.[1]?.[1] as number) || 0;
+    const ttl = (results?.[2]?.[1] as number) || -1;
+
+    // ioredis Stream yanıtını JSON formatına dönüştürür
+    const entries: StreamEntry[] = rawEntries.map(([id, fieldsArray]: [string, string[]]) => {
+      const fieldsObj: Record<string, string> = {};
+      for (let i = 0; i < fieldsArray.length; i += 2) {
+        fieldsObj[fieldsArray[i]] = fieldsArray[i + 1];
+      }
+      return { id, fields: fieldsObj };
+    });
+
+    return { entries, totalLength, ttl };
+  } catch (error: any) {
+    throw new Error(`Stream verisi okunurken hata oluştu: ${error.message}`);
+  }
+}
+
+/**
+ * STREAM'E YENİ ENTRY EKLEME (XADD)
+ */
+export async function addStreamEntry(
+  key: string,
+  fields: Record<string, string>,
+  customId = '*' // '*' Redis'in otomatik ID üretmesini sağlar
+) {
+  try {
+    const args: string[] = [];
+    Object.entries(fields).forEach(([k, v]) => {
+      args.push(k, v);
+    });
+
+    const generatedId = await redis.xadd(key, customId, ...args);
+    return { success: true, id: generatedId };
+  } catch (error: any) {
+    throw new Error(`Stream'e veri eklenemedi: ${error.message}`);
+  }
+}
+
+/**
+ * STREAM ENTRY SİLME (XDEL)
+ */
+export async function deleteStreamEntry(key: string, entryId: string) {
+  try {
+    await redis.xdel(key, entryId);
+    return { success: true };
+  } catch (error: any) {
+    throw new Error(`Stream entry silinemedi: ${error.message}`);
+  }
+}

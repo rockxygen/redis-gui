@@ -6,6 +6,7 @@ import { KeyTree } from '@/components/redis/key-tree';
 import { KeyValueEditor } from '@/components/redis/key-value-editor';
 import { HashEditor } from '@/components/redis/hash-editor';
 import { ListEditor } from '@/components/redis/list-editor';
+import { StreamEditor } from '@/components/redis/stream-editor';
 import { 
   getRedisKeys, 
   getKeyValue, 
@@ -139,7 +140,13 @@ export function KeyExplorerView() {
                 onUpdateTtl={async (t) => console.log('EXPIRE:', t)}
               />
             )}
-
+            {activeKeyData.type === 'stream' && (
+                <StreamEditor
+                    keyName={selectedKey}
+                    initialTtl={activeKeyData.ttl}
+                    onDeleteKey={handleDeleteKey}
+                />
+            )}
             {activeKeyData.type === 'list' && (
               <ListEditor
                 keyName={selectedKey}
