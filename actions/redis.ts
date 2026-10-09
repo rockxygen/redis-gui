@@ -1,7 +1,7 @@
 // app/actions/redis.ts
 'use server';
 
-import { redis } from '@/lib/redis';
+import { getActiveRedisClient } from '@/actions/connections';
 import { validateCommand } from '@/lib/security';
 
 export interface RedisKeyItem {
@@ -10,9 +10,13 @@ export interface RedisKeyItem {
   ttl: number;
 }
 
+export interface StreamEntry {
+  id: string;
+  fields: Record<string, string>;
+}
+
 /**
  * 1. SCAN Algoritması ile Non-Blocking Anahtar Listeleme
- * 'KEYS *' yerine Redis'i kilitlemeyecek SCAN kullanır.
  */
 export async function getRedisKeys(
   pattern = '*',
@@ -23,6 +27,8 @@ export async function getRedisKeys(
   nextCursor: string;
   totalFound: number;
 }> {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     const [newCursor, scannedKeys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', count);
 
@@ -30,7 +36,6 @@ export async function getRedisKeys(
       return { keys: [], nextCursor: newCursor, totalFound: 0 };
     }
 
-    // PIPELINE ile tüm key'lerin tip ve TTL bilgilerini paralel/tek istekte çek
     const pipeline = redis.pipeline();
     scannedKeys.forEach((key) => {
       pipeline.type(key);
@@ -58,6 +63,8 @@ export async function getRedisKeys(
   } catch (error: any) {
     console.error('SCAN Hatası:', error);
     throw new Error(`Redis anahtarları taranırken hata oluştu: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
@@ -65,6 +72,8 @@ export async function getRedisKeys(
  * 2. Key Tipi Bilgisine Göre Genel Veri Çekme (String, JSON)
  */
 export async function getKeyValue(key: string, type: RedisKeyItem['type']) {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     const ttl = await redis.ttl(key);
 
@@ -80,22 +89,25 @@ export async function getKeyValue(key: string, type: RedisKeyItem['type']) {
     }
   } catch (error: any) {
     throw new Error(`Veri okuma hatası (${key}): ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 /**
  * 3. GÜVENLİ LİSTE OKUMA (List Pagination - LRANGE)
- * Benchmark kilitlenmelerini önlemek için '0 -1' yerine limitli aralık okur.
  */
 export async function getListItems(
   key: string,
   start = 0,
   stop = 49
 ): Promise<{ items: string[]; totalLength: number; ttl: number }> {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     const pipeline = redis.pipeline();
-    pipeline.lrange(key, start, stop); // Sadece hedeflenen aralığı çek
-    pipeline.llen(key);                // Toplam liste eleman sayısı (O(1))
+    pipeline.lrange(key, start, stop);
+    pipeline.llen(key);
     pipeline.ttl(key);
 
     const results = await pipeline.exec();
@@ -107,18 +119,21 @@ export async function getListItems(
     return { items, totalLength, ttl };
   } catch (error: any) {
     throw new Error(`List verisi çekilirken hata oluştu: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 /**
  * 4. GÜVENLİ HASH OKUMA (HSCAN)
- * 'HGETALL' yerine çok büyük Hash yapılarını kilitlememek için HSCAN kullanır.
  */
 export async function getHashFields(
   key: string,
   cursor = '0',
   count = 100
 ): Promise<{ fields: { field: string; value: string }[]; nextCursor: string; ttl: number }> {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     const [nextCursor, rawFields] = await redis.hscan(key, cursor, 'COUNT', count);
     const ttl = await redis.ttl(key);
@@ -134,50 +149,90 @@ export async function getHashFields(
     return { fields, nextCursor, ttl };
   } catch (error: any) {
     throw new Error(`Hash verisi taranırken hata oluştu: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 /**
- * 5. GÜVENLİ SET & ZSET OKUMA (SSCAN / ZSCAN)
+ * 5. GÜVENLİ STREAM OKUMA (XREVRANGE)
  */
-export async function getSetMembers(key: string, cursor = '0', count = 100) {
-  try {
-    const [nextCursor, members] = await redis.sscan(key, cursor, 'COUNT', count);
-    const ttl = await redis.ttl(key);
-    return { members, nextCursor, ttl };
-  } catch (error: any) {
-    throw new Error(`Set üyeleri taranırken hata oluştu: ${error.message}`);
-  }
-}
+export async function getStreamEntries(
+  key: string,
+  count = 50,
+  endId = '+',
+  startId = '-'
+): Promise<{ entries: StreamEntry[]; totalLength: number; ttl: number }> {
+  const { client: redis } = await getActiveRedisClient();
 
-export async function getZSetMembers(key: string, start = 0, stop = 49) {
   try {
     const pipeline = redis.pipeline();
-    pipeline.zrange(key, start, stop, 'WITHSCORES');
-    pipeline.zcard(key);
+    pipeline.xrevrange(key, endId, startId, 'COUNT', count);
+    pipeline.xlen(key);
     pipeline.ttl(key);
 
     const results = await pipeline.exec();
-    const rawResult = (results?.[0]?.[1] as string[]) || [];
+
+    const rawEntries = (results?.[0]?.[1] as any[]) || [];
     const totalLength = (results?.[1]?.[1] as number) || 0;
     const ttl = (results?.[2]?.[1] as number) || -1;
 
-    const members: { value: string; score: number }[] = [];
-    for (let i = 0; i < rawResult.length; i += 2) {
-      members.push({
-        value: rawResult[i],
-        score: Number(rawResult[i + 1]),
-      });
-    }
+    const entries: StreamEntry[] = rawEntries.map(([id, fieldsArray]: [string, string[]]) => {
+      const fieldsObj: Record<string, string> = {};
+      for (let i = 0; i < fieldsArray.length; i += 2) {
+        fieldsObj[fieldsArray[i]] = fieldsArray[i + 1];
+      }
+      return { id, fields: fieldsObj };
+    });
 
-    return { members, totalLength, ttl };
+    return { entries, totalLength, ttl };
   } catch (error: any) {
-    throw new Error(`ZSet üyeleri çekilirken hata oluştu: ${error.message}`);
+    throw new Error(`Stream verisi okunurken hata oluştu: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 /**
- * 6. Key Oluşturma ve Güncelleme İşlemleri
+ * 6. STREAM ENTRY EKLEME (XADD) VE SİLME (XDEL)
+ */
+export async function addStreamEntry(
+  key: string,
+  fields: Record<string, string>,
+  customId = '*'
+) {
+  const { client: redis } = await getActiveRedisClient();
+
+  try {
+    const args: string[] = [];
+    Object.entries(fields).forEach(([k, v]) => {
+      args.push(k, v);
+    });
+
+    const generatedId = await redis.xadd(key, customId, ...args);
+    return { success: true, id: generatedId };
+  } catch (error: any) {
+    throw new Error(`Stream'e veri eklenemedi: ${error.message}`);
+  } finally {
+    await redis.quit();
+  }
+}
+
+export async function deleteStreamEntry(key: string, entryId: string) {
+  const { client: redis } = await getActiveRedisClient();
+
+  try {
+    await redis.xdel(key, entryId);
+    return { success: true };
+  } catch (error: any) {
+    throw new Error(`Stream entry silinemedi: ${error.message}`);
+  } finally {
+    await redis.quit();
+  }
+}
+
+/**
+ * 7. Key Oluşturma ve Güncelleme İşlemleri
  */
 export async function setKeyValue(
   key: string,
@@ -185,6 +240,8 @@ export async function setKeyValue(
   type: RedisKeyItem['type'],
   ttl = -1
 ) {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     if (type === 'string' || type === 'json') {
       const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
@@ -199,13 +256,17 @@ export async function setKeyValue(
     return { success: true };
   } catch (error: any) {
     throw new Error(`Veri kaydetme hatası: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 /**
- * 7. List, Hash ve Set Aksiyonları
+ * 8. List ve Hash Aksiyonları
  */
 export async function pushListItem(key: string, value: string, position: 'head' | 'tail' = 'tail') {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     if (position === 'head') {
       await redis.lpush(key, value);
@@ -215,31 +276,43 @@ export async function pushListItem(key: string, value: string, position: 'head' 
     return { success: true };
   } catch (error: any) {
     throw new Error(`Listeye eleman eklenemedi: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 export async function setHashField(key: string, field: string, value: string) {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     await redis.hset(key, field, value);
     return { success: true };
   } catch (error: any) {
     throw new Error(`Hash alanı güncellenemedi: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 export async function deleteHashField(key: string, field: string) {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     await redis.hdel(key, field);
     return { success: true };
   } catch (error: any) {
     throw new Error(`Hash alanı silinemedi: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 /**
- * 8. Key ve TTL Yönetimi
+ * 9. Key ve TTL Yönetimi
  */
 export async function setKeyTtl(key: string, ttlSeconds: number) {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     if (ttlSeconds <= 0) {
       await redis.persist(key);
@@ -249,26 +322,34 @@ export async function setKeyTtl(key: string, ttlSeconds: number) {
     return { success: true };
   } catch (error: any) {
     throw new Error(`TTL ayarlanamadı: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 export async function deleteRedisKey(key: string) {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     await redis.del(key);
     return { success: true };
   } catch (error: any) {
     throw new Error(`Anahtar silinemedi: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
 
 /**
- * 9. CLI Üzerinden Özel Komut Çalıştırma (Güvenlik Korumalı)
+ * 10. CLI Üzerinden Özel Komut Çalıştırma (Güvenlik Korumalı)
  */
 export async function executeRedisCommand(rawCommand: string) {
   const validation = validateCommand(rawCommand);
   if (!validation.isValid) {
     return { success: false, error: validation.reason };
   }
+
+  const { client: redis } = await getActiveRedisClient();
 
   try {
     const parts = rawCommand.trim().split(/\s+/);
@@ -279,81 +360,7 @@ export async function executeRedisCommand(rawCommand: string) {
     return { success: true, result };
   } catch (error: any) {
     return { success: false, error: error.message };
-  }
-}
-
-// app/actions/redis.ts içerisine eklenecek Stream fonksiyonları:
-
-export interface StreamEntry {
-  id: string; // Örn: "1718000000000-0"
-  fields: Record<string, string>;
-}
-
-/**
- * GÜVENLİ STREAM OKUMA (XREVRANGE - Son eklenenlerden geriye doğru)
- */
-export async function getStreamEntries(
-  key: string,
-  count = 50,
-  endId = '+',
-  startId = '-'
-): Promise<{ entries: StreamEntry[]; totalLength: number; ttl: number }> {
-  try {
-    const pipeline = redis.pipeline();
-    pipeline.xrevrange(key, endId, startId, 'COUNT', count); // En son eklenen mesajları getirir
-    pipeline.xlen(key); // Stream'deki toplam mesaj sayısı (O(1))
-    pipeline.ttl(key);
-
-    const results = await pipeline.exec();
-
-    const rawEntries = (results?.[0]?.[1] as any[]) || [];
-    const totalLength = (results?.[1]?.[1] as number) || 0;
-    const ttl = (results?.[2]?.[1] as number) || -1;
-
-    // ioredis Stream yanıtını JSON formatına dönüştürür
-    const entries: StreamEntry[] = rawEntries.map(([id, fieldsArray]: [string, string[]]) => {
-      const fieldsObj: Record<string, string> = {};
-      for (let i = 0; i < fieldsArray.length; i += 2) {
-        fieldsObj[fieldsArray[i]] = fieldsArray[i + 1];
-      }
-      return { id, fields: fieldsObj };
-    });
-
-    return { entries, totalLength, ttl };
-  } catch (error: any) {
-    throw new Error(`Stream verisi okunurken hata oluştu: ${error.message}`);
-  }
-}
-
-/**
- * STREAM'E YENİ ENTRY EKLEME (XADD)
- */
-export async function addStreamEntry(
-  key: string,
-  fields: Record<string, string>,
-  customId = '*' // '*' Redis'in otomatik ID üretmesini sağlar
-) {
-  try {
-    const args: string[] = [];
-    Object.entries(fields).forEach(([k, v]) => {
-      args.push(k, v);
-    });
-
-    const generatedId = await redis.xadd(key, customId, ...args);
-    return { success: true, id: generatedId };
-  } catch (error: any) {
-    throw new Error(`Stream'e veri eklenemedi: ${error.message}`);
-  }
-}
-
-/**
- * STREAM ENTRY SİLME (XDEL)
- */
-export async function deleteStreamEntry(key: string, entryId: string) {
-  try {
-    await redis.xdel(key, entryId);
-    return { success: true };
-  } catch (error: any) {
-    throw new Error(`Stream entry silinemedi: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }

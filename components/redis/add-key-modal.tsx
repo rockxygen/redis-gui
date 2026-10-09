@@ -5,13 +5,14 @@ import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Key, Clock, FileCode } from 'lucide-react';
+import { Plus, Key, Clock } from 'lucide-react';
 
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -26,7 +27,6 @@ const addKeySchema = z.object({
 });
 
 type AddKeyFormValues = z.infer<typeof addKeySchema>;
-type AddKeyFormInput = z.input<typeof addKeySchema>;
 
 interface AddKeyModalProps {
   onSuccess: () => void;
@@ -41,7 +41,7 @@ export function AddKeyModal({ onSuccess }: AddKeyModalProps) {
     reset,
     watch,
     formState: { errors, isSubmitting },
-  } = useForm<AddKeyFormInput, any, AddKeyFormValues>({
+  } = useForm<AddKeyFormValues>({
     resolver: zodResolver(addKeySchema),
     defaultValues: {
       key: '',
@@ -56,7 +56,7 @@ export function AddKeyModal({ onSuccess }: AddKeyModalProps) {
   const onSubmit = async (values: AddKeyFormValues) => {
     try {
       if (values.type === 'json') {
-        JSON.parse(values.value); // Validasyon kontrolü
+        JSON.parse(values.value);
       }
       await setKeyValue(values.key, values.value, values.type as RedisKeyItem['type'], values.ttl);
       reset();
@@ -69,10 +69,11 @@ export function AddKeyModal({ onSuccess }: AddKeyModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <Button size="sm" className="h-7 text-xs gap-1" onClick={() => setOpen(true)}>
+      {/* ✅ FIX: asChild kaldırıldı */}
+      <DialogTrigger className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring bg-primary text-primary-foreground shadow hover:bg-primary/90 h-7 px-3 gap-1">
         <Plus className="h-3.5 w-3.5" />
         Yeni Key
-      </Button>
+      </DialogTrigger>
       <DialogContent className="sm:max-w-md bg-background text-foreground">
         <DialogHeader>
           <DialogTitle className="text-sm font-semibold flex items-center gap-2">
@@ -82,7 +83,6 @@ export function AddKeyModal({ onSuccess }: AddKeyModalProps) {
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-2">
-          {/* Key Adı */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">Key Adı</label>
             <Input
@@ -93,7 +93,6 @@ export function AddKeyModal({ onSuccess }: AddKeyModalProps) {
             {errors.key && <p className="text-[10px] text-destructive">{errors.key.message}</p>}
           </div>
 
-          {/* Veri Tipi Seçimi */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">Veri Tipi</label>
             <select
@@ -107,7 +106,6 @@ export function AddKeyModal({ onSuccess }: AddKeyModalProps) {
             </select>
           </div>
 
-          {/* Değer / İçerik */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">Değer (Value)</label>
             <textarea
@@ -123,7 +121,6 @@ export function AddKeyModal({ onSuccess }: AddKeyModalProps) {
             {errors.value && <p className="text-[10px] text-destructive">{errors.value.message}</p>}
           </div>
 
-          {/* TTL (Time To Live) */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
               <Clock className="h-3 w-3" /> TTL (Saniye, -1 Süresiz)

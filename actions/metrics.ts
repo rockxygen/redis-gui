@@ -1,7 +1,7 @@
 // app/actions/metrics.ts
 'use server';
 
-import { redis } from '@/lib/redis';
+import { getActiveRedisClient } from '@/actions/connections';
 
 export interface MetricPoint {
   time: string;
@@ -36,8 +36,7 @@ function parseRedisInfo(rawInfo: string): Record<string, string> {
 }
 
 /**
- * db0, db1 gibi keyspace satırlarından toplam key sayısını çıkartır
- * Örn satır: "keys=1204,expires=5,avg_ttl=3600"
+ * db0, db1 gibi keyspace satırlarından toplam key sayısını hesaplar
  */
 function parseTotalKeys(infoMap: Record<string, string>): number {
   let totalKeys = 0;
@@ -54,9 +53,11 @@ function parseTotalKeys(infoMap: Record<string, string>): number {
 }
 
 /**
- * Canlı Redis Metriklerini Anlık Olarak Çeker
+ * Aktif Seçili Redis Sunucusundan Canlı Metrikleri Çeker
  */
 export async function getRealtimeMetrics(): Promise<MetricPoint> {
+  const { client: redis } = await getActiveRedisClient();
+
   try {
     const rawInfo = await redis.info();
     const info = parseRedisInfo(rawInfo);
@@ -103,5 +104,7 @@ export async function getRealtimeMetrics(): Promise<MetricPoint> {
   } catch (error: any) {
     console.error('Redis metrics fetch error:', error);
     throw new Error(`Redis metrikleri alınamadı: ${error.message}`);
+  } finally {
+    await redis.quit();
   }
 }
