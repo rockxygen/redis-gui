@@ -1,123 +1,100 @@
 // components/redis/list-editor.tsx
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { 
-  Plus, 
-  Trash2, 
-  Save, 
-  Search, 
-  Clock, 
   ListOrdered, 
-  ArrowDownToLine, 
-  ArrowUpToLine, 
-  Check 
+  Trash2, 
+  ChevronLeft, 
+  ChevronRight, 
+  Clock, 
+  Plus, 
+  Save, 
+  Check, 
+  Loader2 
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { getListItems, pushListItem, deleteRedisKey, setKeyTtl } from '@/actions/redis';
 
 interface ListEditorProps {
   keyName: string;
-  initialItems: string[];
   initialTtl?: number;
-  onPushItem: (value: string, position: 'head' | 'tail') => Promise<void>;
-  onSetIndex: (index: number, value: string) => Promise<void>;
-  onRemoveIndex: (index: number) => Promise<void>;
   onDeleteKey: (key: string) => Promise<void>;
-  onUpdateTtl: (ttl: number) => Promise<void>;
 }
 
-export function ListEditor({
-  keyName,
-  initialItems,
-  initialTtl = -1,
-  onPushItem,
-  onSetIndex,
-  onRemoveIndex,
-  onDeleteKey,
-  onUpdateTtl,
-}: ListEditorProps) {
-  const [items, setItems] = useState<string[]>(initialItems);
-  const [search, setSearch] = useState('');
-  const [ttl, setTtl] = useState(initialTtl);
+const PAGE_SIZE = 100; // Her sayfada 100 eleman (bunlar sanallaştırılacak)
 
-  // Ekleme state'leri
+export function ListEditor({ keyName, initialTtl = -1, onDeleteKey }: ListEditorProps) {
+  const [items, setItems] = useState<string[]>([]);
+  const [totalLength, setTotalLength] = useState(0);
+  const [ttl, setTtl] = useState(initialTtl);
+  const [page, setPage] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Ekleme Formu
   const [newItemValue, setNewItemValue] = useState('');
   const [isAdding, setIsAdding] = useState(false);
 
-  // Düzenleme takibi (index -> newValue)
-  const [editedIndices, setEditedIndices] = useState<Record<number, string>>({});
-  const [savedIndex, setSavedIndex] = useState<number | null>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  // Veri yükleme
+  const loadPage = useCallback(async (pageIndex: number) => {
+    setIsLoading(true);
+    try {
+      const start = pageIndex * PAGE_SIZE;
+      const stop = start + PAGE_SIZE - 1;
+      const res = await getListItems(keyName, start, stop);
+
+      setItems(res.items);
+      setTotalLength(res.totalLength);
+      if (res.ttl !== undefined) setTtl(res.ttl);
+    } catch (err) {
+      console.error('List sayfa yükleme hatası:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [keyName]);
 
   useEffect(() => {
-    setItems(initialItems);
-    setTtl(initialTtl);
-    setEditedIndices({});
-  }, [keyName, initialItems, initialTtl]);
+    setPage(0);
+    loadPage(0);
+  }, [keyName, loadPage]);
 
-  const handleValueChange = (index: number, val: string) => {
-    setEditedIndices((prev) => ({ ...prev, [index]: val }));
-  };
-
-  const handleSaveIndex = async (index: number) => {
-    const val = editedIndices[index];
-    if (val === undefined) return;
-
-    await onSetIndex(index, val);
-
-    setItems((prev) => prev.map((item, i) => (i === index ? val : item)));
-    setEditedIndices((prev) => {
-      const updated = { ...prev };
-      delete updated[index];
-      return updated;
-    });
-
-    setSavedIndex(index);
-    setTimeout(() => setSavedIndex(null), 1500);
-  };
+  // @tanstack/react-virtual Yapılandırması
+  const rowVirtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 40, // Her satırın yüksekliği (px)
+    overscan: 5, // Görüş alanı dışı ön yükleme miktarı
+  });
 
   const handleAddItem = async (position: 'head' | 'tail') => {
     if (!newItemValue.trim()) return;
-
-    await onPushItem(newItemValue.trim(), position);
-
-    if (position === 'head') {
-      setItems((prev) => [newItemValue.trim(), ...prev]);
-    } else {
-      setItems((prev) => [...prev, newItemValue.trim()]);
-    }
-
+    await pushListItem(keyName, newItemValue.trim(), position);
     setNewItemValue('');
     setIsAdding(false);
+    loadPage(page);
   };
 
-  const handleRemoveIndex = async (index: number) => {
-    await onRemoveIndex(index);
-    setItems((prev) => prev.filter((_, i) => i !== index));
+  const handleUpdateTtl = async () => {
+    await setKeyTtl(keyName, ttl);
   };
+
+  const totalPages = Math.ceil(totalLength / PAGE_SIZE);
 
   return (
-    <Card className="h-full flex flex-col border-0 rounded-none border-l border-border bg-background">
+    <div className="h-full flex flex-col bg-background border-l border-border select-none">
       {/* Üst Bilgi Barı */}
-      <CardHeader className="p-4 border-b border-border space-y-3">
+      <div className="p-4 border-b border-border space-y-3 shrink-0">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 min-w-0">
             <ListOrdered className="h-4 w-4 text-blue-500 shrink-0" />
-            <span className="font-mono text-sm font-semibold truncate" title={keyName}>
-              {keyName}
-            </span>
-            <Badge variant="outline" className="uppercase text-[10px] bg-blue-500/15 text-blue-500 border-blue-500/30 font-bold">
-              LIST ({items.length} items)
+            <span className="font-mono text-sm font-semibold truncate">{keyName}</span>
+            <Badge variant="outline" className="uppercase text-[10px] bg-blue-500/15 text-blue-500 border-blue-500/30 font-bold shrink-0">
+              LIST ({totalLength.toLocaleString()} items)
             </Badge>
           </div>
 
@@ -125,14 +102,14 @@ export function ListEditor({
             variant="destructive"
             size="sm"
             onClick={() => onDeleteKey(keyName)}
-            className="h-8 text-xs gap-1.5"
+            className="h-8 text-xs gap-1.5 shrink-0"
           >
             <Trash2 className="h-3.5 w-3.5" />
             Key'i Sil
           </Button>
         </div>
 
-        {/* TTL ve Arama */}
+        {/* TTL Barı & Ekleme Butonu */}
         <div className="flex items-center justify-between gap-4 pt-1">
           <div className="flex items-center gap-2">
             <Clock className="h-3.5 w-3.5 text-muted-foreground" />
@@ -141,148 +118,127 @@ export function ListEditor({
               type="number"
               value={ttl}
               onChange={(e) => setTtl(Number(e.target.value))}
-              onBlur={() => onUpdateTtl(ttl)}
+              onBlur={handleUpdateTtl}
               className="w-24 h-7 text-xs font-mono"
             />
           </div>
 
-          <div className="relative w-64">
-            <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="İçerik ara..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-8 h-7 text-xs"
-            />
-          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsAdding(!isAdding)}
+            className="h-7 text-xs gap-1"
+          >
+            <Plus className="h-3.5 w-3.5" /> Eleman Ekle
+          </Button>
         </div>
-      </CardHeader>
 
-      {/* Liste Tablosu */}
-      <CardContent className="flex-1 p-0 overflow-y-auto">
-        <Table>
-          <TableHeader className="sticky top-0 bg-muted/50 z-10">
-            <TableRow className="text-xs">
-              <TableHead className="w-[80px]">Index</TableHead>
-              <TableHead>Value</TableHead>
-              <TableHead className="w-[100px] text-right">Aksiyonlar</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {/* Yeni Eleman Ekleme Formu */}
-            {isAdding ? (
-              <TableRow className="bg-blue-500/5">
-                <TableCell className="font-mono text-xs text-muted-foreground">NEW</TableCell>
-                <TableCell>
-                  <Input
-                    placeholder="Eleman Değeri..."
-                    value={newItemValue}
-                    onChange={(e) => setNewItemValue(e.target.value)}
-                    className="h-7 text-xs font-mono"
-                  />
-                </TableCell>
-                <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleAddItem('head')}
-                      title="Başa Ekle (LPUSH)"
-                      className="h-7 px-2 text-xs gap-1"
-                    >
-                      <ArrowUpToLine className="h-3.5 w-3.5" /> Başa
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => handleAddItem('tail')}
-                      title="Sona Ekle (RPUSH)"
-                      className="h-7 px-2 text-xs gap-1"
-                    >
-                      <ArrowDownToLine className="h-3.5 w-3.5" /> Sona
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : (
-              <TableRow>
-                <TableCell colSpan={3}>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setIsAdding(true)}
-                    className="w-full h-7 text-xs border-dashed gap-1.5 text-muted-foreground hover:text-foreground"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Yeni Eleman Ekle
-                  </Button>
-                </TableCell>
-              </TableRow>
-            )}
+        {/* Yeni Eleman Ekleme Paneli */}
+        {isAdding && (
+          <div className="flex items-center gap-2 pt-2 border-t border-border">
+            <Input
+              placeholder="Yeni liste elemanı..."
+              value={newItemValue}
+              onChange={(e) => setNewItemValue(e.target.value)}
+              className="h-8 text-xs font-mono flex-1"
+            />
+            <Button size="sm" onClick={() => handleAddItem('head')} variant="outline" className="h-8 text-xs">
+              Başa Ekle
+            </Button>
+            <Button size="sm" onClick={() => handleAddItem('tail')} className="h-8 text-xs">
+              Sona Ekle
+            </Button>
+          </div>
+        )}
+      </div>
 
-            {/* List Öğeleri */}
-            {items.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={3} className="text-center py-6 text-xs text-muted-foreground">
-                  Liste boş.
-                </TableCell>
-              </TableRow>
-            ) : (
-              items.map((val, idx) => {
-                if (search && !val.toLowerCase().includes(search.toLowerCase())) {
-                  return null;
-                }
+      {/* Sanallaştırılmış Liste (Virtual List Container) */}
+      <div ref={parentRef} className="flex-1 overflow-y-auto relative">
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <span className="text-xs">Elemanlar yükleniyor...</span>
+          </div>
+        ) : items.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-xs text-muted-foreground">
+            Liste boş.
+          </div>
+        ) : (
+          <div
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              width: '100%',
+              position: 'relative',
+            }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const val = items[virtualRow.index];
+              const globalIndex = page * PAGE_SIZE + virtualRow.index;
 
-                const isEdited = editedIndices[idx] !== undefined && editedIndices[idx] !== val;
-                const isJustSaved = savedIndex === idx;
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                  className="flex items-center px-4 border-b border-border/50 text-xs font-mono hover:bg-muted/30 transition-colors"
+                >
+                  <span className="w-16 text-muted-foreground shrink-0">[{globalIndex}]</span>
+                  <span className="truncate flex-1 text-foreground" title={val}>
+                    {val}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
-                return (
-                  <TableRow key={idx} className="text-xs group">
-                    <TableCell className="font-mono font-medium text-muted-foreground">
-                      [{idx}]
-                    </TableCell>
-                    <TableCell>
-                      <Input
-                        value={editedIndices[idx] ?? val}
-                        onChange={(e) => handleValueChange(idx, e.target.value)}
-                        className={`h-7 text-xs font-mono ${
-                          isEdited ? 'border-blue-500 focus-visible:ring-blue-500' : ''
-                        }`}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        {isEdited && (
-                          <Button
-                            size="icon"
-                            variant="default"
-                            onClick={() => handleSaveIndex(idx)}
-                            className="h-7 w-7"
-                          >
-                            <Save className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                        {isJustSaved && (
-                          <span className="text-emerald-500 flex items-center p-1">
-                            <Check className="h-3.5 w-3.5" />
-                          </span>
-                        )}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleRemoveIndex(idx)}
-                          className="h-7 w-7 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+      {/* Alt Sayfalama (Pagination Bar) */}
+      <div className="p-3 border-t border-border flex items-center justify-between text-xs bg-muted/20 shrink-0">
+        <span className="text-muted-foreground font-mono">
+          Gösterilen: {page * PAGE_SIZE} - {Math.min((page + 1) * PAGE_SIZE, totalLength)} / {totalLength}
+        </span>
+
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const prev = page - 1;
+              setPage(prev);
+              loadPage(prev);
+            }}
+            disabled={page === 0 || isLoading}
+            className="h-7 text-xs gap-1"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" /> Önceki
+          </Button>
+
+          <span className="font-mono px-2">
+            {page + 1} / {totalPages || 1}
+          </span>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const next = page + 1;
+              setPage(next);
+              loadPage(next);
+            }}
+            disabled={(page + 1) * PAGE_SIZE >= totalLength || isLoading}
+            className="h-7 text-xs gap-1"
+          >
+            Sonraki <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -34,3 +34,9 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+Büyük Veri Yönetimi: Milyonlarca anahtar içeren üretim ortamlarında kasma yaşanmaması için UI tarafında Virtual Scrolling (@tanstack/react-virtual) kullanın.
+
+Güvenlik: Redis şifreleri ve URI'leri tarayıcı tarafında (LocalStorage) tutulacaksa AES ile şifreleyin veya sunucu tarafında güvenli oturumlarda (HTTP-only cookie / encrypted session) saklayın.
+
+Type-Specific Handlers: Hash verileri için Key-Value tablosu, List verileri için sıra numaralı dizi arayüzü, JSON için kod editörü sunmak kullanıcı deneyimini doğrudan artıracaktır.

@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # -------------------------------------------------------------
+  # 1. REDIS MANAGEMENT GUI SERVICE
+  # -------------------------------------------------------------
+  redis-gui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: redis-management-gui
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Docker ağı içindeki redis konteynerine bağlanır
+      - REDIS_URL=redis://:supersecretredispassword@redis-server:6379
+      - ENCRYPTION_SECRET=a-32-character-ultra-secure-key!
+      - NEXT_PUBLIC_REDIS_SCAN_COUNT=100
+      - NEXT_PUBLIC_METRICS_POLLING_MS=2000
+    depends_on:
+      redis-server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - redis-net
+
+  # -------------------------------------------------------------
+  # 2. LOCAL REDIS SERVER SERVICE (Test ve Yerel Kullanım İçin)
+  # -------------------------------------------------------------
+  redis-server:
+    image: redis:7.2-alpine
+    container_name: redis-server
+    command: redis-server --requirepass supersecretredispassword --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "supersecretredispassword", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - redis-net
+
+networks:
+  redis-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local

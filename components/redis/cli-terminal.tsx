@@ -2,7 +2,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Terminal as TerminalIcon, Trash2, CornerDownLeft, Sparkles } from 'lucide-react';
+import { Terminal as TerminalIcon, Trash2, CornerDownLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { executeCliCommand } from '@/actions/cli';
 
@@ -15,15 +15,19 @@ interface TerminalLog {
   timestamp: string;
 }
 
+// FIX: Hydration Mismatch yaşanmaması için ilk state'deki saati sabit string yapıyoruz.
+const INITIAL_LOGS: TerminalLog[] = [
+  {
+    id: 'welcome-log',
+    command: 'INFO',
+    output:
+      '# Redis Interactive Shell v1.0.0\nConnected to local Redis instance.\nType "HELP" or commands like "GET key", "PING", "DBSIZE"...',
+    timestamp: 'SYSTEM',
+  },
+];
+
 export function CliTerminal() {
-  const [logs, setLogs] = useState<TerminalLog[]>([
-    {
-      id: 'welcome-log',
-      command: 'INFO',
-      output: '# Redis Interactive Shell v1.0.0\nConnected to local Redis instance.\nType "HELP" or commands like "GET key", "PING", "DBSIZE"...',
-      timestamp: new Date().toLocaleTimeString(),
-    },
-  ]);
+  const [logs, setLogs] = useState<TerminalLog[]>(INITIAL_LOGS);
   const [input, setInput] = useState('');
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
@@ -37,7 +41,7 @@ export function CliTerminal() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
-  // Ctrl+L ile temizleme kısayolu
+  // Ctrl+L ile ekran temizleme
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key.toLowerCase() === 'l') {
@@ -70,20 +74,27 @@ export function CliTerminal() {
       return;
     }
 
+    // Yalnızca kullanıcı eylemiyle (İstemci tarafında) anlık saati ekliyoruz
+    const now = new Date();
+    const timeString = `${now.getHours().toString().padStart(2, '0')}:${now
+      .getMinutes()
+      .toString()
+      .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+
     const newLog: TerminalLog = {
       id: Math.random().toString(36).substring(2, 9),
       command: cmd,
       output: res.formattedOutput,
       error: res.error,
       executionTimeMs: res.executionTimeMs,
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: timeString,
     };
 
     setLogs((prev) => [...prev, newLog]);
     setIsExecuting(false);
   };
 
-  // Klavye Ok Tuşlarıyla Geçmiş Gezinimi
+  // Ok tuşlarıyla komut geçmişinde gezinme
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowUp') {
       e.preventDefault();
@@ -145,11 +156,9 @@ export function CliTerminal() {
             <div className="flex items-center gap-2 text-slate-400">
               <span className="text-emerald-400 font-bold select-none">&gt;</span>
               <span className="text-slate-100 font-semibold">{log.command}</span>
-              {log.executionTimeMs !== undefined && (
-                <span className="text-[10px] text-slate-500 ml-auto select-none">
-                  {log.executionTimeMs}ms
-                </span>
-              )}
+              <span className="text-[10px] text-slate-500 ml-auto select-none">
+                {log.executionTimeMs !== undefined ? `${log.executionTimeMs}ms` : log.timestamp}
+              </span>
             </div>
 
             {/* Çıktı / Yanıt Satırı */}
@@ -170,7 +179,7 @@ export function CliTerminal() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Komut Giriş Satırı (Input Bar) */}
+      {/* Komut Giriş Satırı */}
       <form
         onSubmit={handleCommandSubmit}
         className="flex items-center gap-2 p-3 bg-slate-900 border-t border-slate-800 shrink-0"
