@@ -232,7 +232,7 @@ export async function deleteStreamEntry(key: string, entryId: string) {
 }
 
 /**
- * 7. Key Oluşturma ve Güncelleme İşlemleri
+ * Key Oluşturma ve Güncelleme İşlemleri (String, JSON, Hash, List)
  */
 export async function setKeyValue(
   key: string,
@@ -251,11 +251,56 @@ export async function setKeyValue(
         await redis.set(key, stringValue);
         if (ttl === -1) await redis.persist(key);
       }
+    } 
+    else if (type === 'hash') {
+      let hashData: Record<string, string> = {};
+
+      // Kullanıcı JSON formatında mı girdi yoksa tek bir string mi girdi kontrol et
+      if (typeof value === 'string') {
+        try {
+          hashData = JSON.parse(value);
+        } catch {
+          // JSON değilse varsayılan olarak "value" alan adı altına yaz
+          hashData = { value: value };
+        }
+      } else {
+        hashData = value;
+      }
+
+      await redis.hset(key, hashData);
+      if (ttl > 0) await redis.expire(key, ttl);
+    } 
+    else if (type === 'list') {
+      let items: string[] = [];
+
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            items = parsed.map((item) => String(item));
+          } else {
+            items = [value];
+          }
+        } catch {
+          // Satır sonu veya virgüle göre elemanlara ayır
+          items = value
+            .split(/\r?\n|,/)
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+
+          if (items.length === 0) items = [value];
+        }
+      } else if (Array.isArray(value)) {
+        items = value;
+      }
+
+      await redis.rpush(key, ...items);
+      if (ttl > 0) await redis.expire(key, ttl);
     }
 
     return { success: true };
   } catch (error: any) {
-    throw new Error(`Veri kaydetme hatası: ${error.message}`);
+    throw new Error(`Veri kaydetme hatası (${type}): ${error.message}`);
   } finally {
     await redis.quit();
   }

@@ -1,10 +1,11 @@
 // components/redis/cli-terminal.tsx
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Terminal as TerminalIcon, Trash2, CornerDownLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { executeCliCommand } from '@/actions/cli';
+import { getConnections, getActiveConnectionId } from '@/actions/connections';
 
 interface TerminalLog {
   id: string;
@@ -15,13 +16,12 @@ interface TerminalLog {
   timestamp: string;
 }
 
-// FIX: Hydration Mismatch yaşanmaması için ilk state'deki saati sabit string yapıyoruz.
 const INITIAL_LOGS: TerminalLog[] = [
   {
     id: 'welcome-log',
     command: 'INFO',
     output:
-      '# Redis Interactive Shell v1.0.0\nConnected to local Redis instance.\nType "HELP" or commands like "GET key", "PING", "DBSIZE"...',
+      '# Redis Interactive Shell v1.0.0\nConnected to selected Redis instance.\nType "HELP" or commands like "GET key", "PING", "DBSIZE"...',
     timestamp: 'SYSTEM',
   },
 ];
@@ -32,9 +32,30 @@ export function CliTerminal() {
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [activeServerInfo, setActiveServerInfo] = useState('Yükleniyor...');
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Aktif sunucu bilgisini çeker
+  const fetchActiveServer = useCallback(async () => {
+    try {
+      const list = await getConnections();
+      const activeId = await getActiveConnectionId();
+      const active = list.find((c) => c.id === activeId) || {
+        name: 'Localhost',
+        host: '127.0.0.1',
+        port: 6379,
+      };
+      setActiveServerInfo(`${active.name} (${active.host}:${active.port})`);
+    } catch {
+      setActiveServerInfo('Localhost (127.0.0.1:6379)');
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchActiveServer();
+  }, [fetchActiveServer]);
 
   // Otomatik aşağı kaydırma
   useEffect(() => {
@@ -74,7 +95,6 @@ export function CliTerminal() {
       return;
     }
 
-    // Yalnızca kullanıcı eylemiyle (İstemci tarafında) anlık saati ekliyoruz
     const now = new Date();
     const timeString = `${now.getHours().toString().padStart(2, '0')}:${now
       .getMinutes()
@@ -126,7 +146,7 @@ export function CliTerminal() {
         <div className="flex items-center gap-2">
           <TerminalIcon className="h-4 w-4 text-emerald-400" />
           <span className="font-semibold text-slate-300">Redis CLI Console</span>
-          <span className="text-[10px] text-slate-500">127.0.0.1:6379</span>
+          <span className="text-[10px] text-emerald-500/80 font-mono">[{activeServerInfo}]</span>
         </div>
 
         <div className="flex items-center gap-2">
