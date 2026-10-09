@@ -1,13 +1,13 @@
 // app/page.tsx
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Database, 
   Key, 
   Activity, 
   Terminal as TerminalIcon, 
-  Settings, 
+  LogOut, 
   RefreshCw 
 } from 'lucide-react';
 
@@ -16,37 +16,62 @@ import { MetricsDashboard } from '@/components/redis/metrics-dashboard';
 import { CliTerminal } from '@/components/redis/cli-terminal';
 import { ConnectionSwitcher } from '@/components/redis/connection-switcher';
 import { AddKeyModal } from '@/components/redis/add-key-modal';
+import { LoginView } from '@/components/auth/login-view';
 import { Button } from '@/components/ui/button';
+import { getCheckSessionAction, logoutAction  } from '@/actions/auth';
 
 type ActiveTab = 'explorer' | 'metrics' | 'cli';
 
 export default function HomePage() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>('explorer');
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
-  // Sunucu değiştiğinde veya manuel yenilemede tüm bileşenleri re-fetch ettirir
-  const handleServerOrDataChanged = () => {
-    setRefreshTrigger((prev) => prev + 1);
+  const checkAuth = async () => {
+    // lib/auth yerine Server Action olan getCheckSessionAction çağrılır
+    const session = await getCheckSessionAction();
+    if (session && !session.mustChangePassword) {
+      setIsAuthenticated(true);
+    } else {
+      setIsAuthenticated(false);
+    }
   };
+
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  const handleLogout = async () => {
+    await logoutAction();
+    setIsAuthenticated(false);
+  };
+
+  if (isAuthenticated === null) {
+    return (
+      <div className="min-h-screen w-full bg-slate-950 flex items-center justify-center text-slate-400 text-xs font-mono">
+        Oturum kontrol ediliyor...
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginView onLoginSuccess={() => setIsAuthenticated(true)} />;
+  }
 
   return (
     <div className="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans">
-      {/* 1. SOL GEZİNTİ BAR (Sidebar Navigation) */}
+      {/* SOL BAR */}
       <aside className="w-16 flex flex-col items-center py-4 border-r border-border bg-sidebar shrink-0 justify-between z-20">
         <div className="flex flex-col items-center gap-6">
-          {/* Logo */}
-          <div className="p-2.5 bg-primary/10 rounded-xl text-primary transition-transform hover:scale-105">
+          <div className="p-2.5 bg-primary/10 rounded-xl text-primary">
             <Database className="h-5 w-5" />
           </div>
 
-          {/* Sekmeler */}
           <nav className="flex flex-col gap-2">
             <Button
               variant={activeTab === 'explorer' ? 'secondary' : 'ghost'}
               size="icon"
-              className={`h-10 w-10 rounded-lg transition-colors ${
-                activeTab === 'explorer' ? 'bg-secondary text-foreground' : 'text-muted-foreground'
-              }`}
+              className="h-10 w-10 rounded-lg"
               onClick={() => setActiveTab('explorer')}
               title="Key Explorer"
             >
@@ -56,9 +81,7 @@ export default function HomePage() {
             <Button
               variant={activeTab === 'metrics' ? 'secondary' : 'ghost'}
               size="icon"
-              className={`h-10 w-10 rounded-lg transition-colors ${
-                activeTab === 'metrics' ? 'bg-secondary text-foreground' : 'text-muted-foreground'
-              }`}
+              className="h-10 w-10 rounded-lg"
               onClick={() => setActiveTab('metrics')}
               title="Canlı Metrikler"
             >
@@ -68,9 +91,7 @@ export default function HomePage() {
             <Button
               variant={activeTab === 'cli' ? 'secondary' : 'ghost'}
               size="icon"
-              className={`h-10 w-10 rounded-lg transition-colors ${
-                activeTab === 'cli' ? 'bg-secondary text-foreground' : 'text-muted-foreground'
-              }`}
+              className="h-10 w-10 rounded-lg"
               onClick={() => setActiveTab('cli')}
               title="Redis CLI Terminal"
             >
@@ -79,54 +100,45 @@ export default function HomePage() {
           </nav>
         </div>
 
-        {/* Ayarlar İkonu */}
-        <div className="flex flex-col items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-foreground">
-            <Settings className="h-4 w-4" />
-          </Button>
-        </div>
+        {/* Çıkış Yap Butonu */}
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleLogout}
+          className="h-9 w-9 text-muted-foreground hover:text-destructive"
+          title="Oturumu Kapat"
+        >
+          <LogOut className="h-4 w-4" />
+        </Button>
       </aside>
 
-      {/* 2. ANA İÇERİK ALANI */}
+      {/* İÇERİK */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Üst Bar (Top App Bar) */}
         <header className="h-12 border-b border-border bg-background/50 backdrop-blur px-4 flex items-center justify-between shrink-0 z-10">
-          <div className="flex items-center gap-3">
-            {/* SUNUCU SEÇİCİ BİLEŞENİ */}
-            <ConnectionSwitcher onConnectionChanged={handleServerOrDataChanged} />
-          </div>
+          <ConnectionSwitcher onConnectionChanged={() => setRefreshTrigger((p) => p + 1)} />
 
-          {/* Sağ Aksiyonlar */}
           <div className="flex items-center gap-2">
             {activeTab === 'explorer' && (
-              <AddKeyModal onSuccess={handleServerOrDataChanged} />
+              <AddKeyModal onSuccess={() => setRefreshTrigger((p) => p + 1)} />
             )}
-
             <Button
               variant="outline"
               size="icon"
-              onClick={handleServerOrDataChanged}
+              onClick={() => setRefreshTrigger((p) => p + 1)}
               className="h-7 w-7"
-              title="Yenile"
             >
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           </div>
         </header>
 
-        {/* Tab İçerik Alanı */}
         <main className="flex-1 overflow-hidden relative">
-          {/* TAB 1: KEY EXPLORER */}
           <div className={`h-full w-full ${activeTab === 'explorer' ? 'block' : 'hidden'}`}>
             <KeyExplorerView key={refreshTrigger} />
           </div>
-
-          {/* TAB 2: METRICS DASHBOARD */}
           <div className={`h-full w-full ${activeTab === 'metrics' ? 'block' : 'hidden'}`}>
             <MetricsDashboard key={refreshTrigger} pollingInterval={2500} />
           </div>
-
-          {/* TAB 3: CLI TERMINAL */}
           <div className={`h-full w-full ${activeTab === 'cli' ? 'block' : 'hidden'}`}>
             <CliTerminal key={refreshTrigger} />
           </div>
