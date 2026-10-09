@@ -18,6 +18,7 @@ import { ConnectionSwitcher } from '@/components/redis/connection-switcher';
 import { AddKeyModal } from '@/components/redis/add-key-modal';
 import { LoginView } from '@/components/auth/login-view';
 import { Button } from '@/components/ui/button';
+import { ConnectionStatusModal } from '@/components/redis/connection-status-modal';
 import { getCheckSessionAction, logoutAction  } from '@/actions/auth';
 
 type ActiveTab = 'explorer' | 'metrics' | 'cli';
@@ -60,6 +61,8 @@ export default function HomePage() {
 
   return (
     <div className="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans">
+      {/* BAĞLANTI KONTROL MODALI (Her an arka planda hazır bekler) */}
+      <ConnectionStatusModal checkIntervalMs={3000} />
       {/* SOL BAR */}
       <aside className="w-16 flex flex-col items-center py-4 border-r border-border bg-sidebar shrink-0 justify-between z-20">
         <div className="flex flex-col items-center gap-6">
